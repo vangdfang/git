@@ -457,3 +457,36 @@ int longest_ancestor_length(const char *path, const char *prefix_list)
 
 	return max_len;
 }
+
+/* strip arbitrary amount of directory separators at end of path */
+static inline int chomp_trailing_dir_sep(const char *path, int len)
+{
+	while (len && is_dir_sep(path[len - 1]))
+		len--;
+	return len;
+}
+
+/* sets prefix if the suffix matches */
+int strip_path_suffix(const char *path, const char *suffix, const char **prefix)
+{
+	int path_len = strlen(path), suffix_len = strlen(suffix);
+
+	while (suffix_len) {
+		if (!path_len)
+			return 1;
+
+		if (is_dir_sep(path[path_len - 1])) {
+			if (!is_dir_sep(suffix[suffix_len - 1]))
+				return 1;
+			path_len = chomp_trailing_dir_sep(path, path_len);
+			suffix_len = chomp_trailing_dir_sep(suffix, suffix_len);
+		}
+		else if (path[--path_len] != suffix[--suffix_len])
+			return 1;
+	}
+
+	if (path_len && !is_dir_sep(path[path_len - 1]))
+		return 1;
+	*prefix = xstrndup(path, chomp_trailing_dir_sep(path, path_len));
+	return 0;
+}
