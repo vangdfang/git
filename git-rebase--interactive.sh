@@ -47,14 +47,6 @@ squash_msg="$state_dir"/message-squash
 # commit without opening the editor.)
 fixup_msg="$state_dir"/message-fixup
 
-# $rewritten is the name of a directory containing files for each
-# commit that is reachable by at least one merge base of $head and
-# $upstream. They are not necessarily rewritten, but their children
-# might be.  This ensures that commits on merged, but otherwise
-# unrelated side branches are left alone. (Think "X" in the man page's
-# example.)
-rewritten="$state_dir"/rewritten
-
 dropped="$state_dir"/dropped
 
 # A script to set the GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, and
@@ -125,6 +117,9 @@ append_todo_help () {
 #  s, squash = use commit, but meld into previous commit
 #  f, fixup = like "squash", but discard this commit's log message
 #  x, exec = run command (the rest of the line) using shell
+#  l, label = mark current commit for later use
+#  g, goto = go to a previously labeled commit
+#  m, merge = perform a merge
 #
 # These lines can be re-ordered; they are executed from top to bottom.
 #
@@ -224,125 +219,7 @@ pick_one () {
 		empty_args="--allow-empty"
 	fi
 
-	test -d "$rewritten" &&
-		pick_one_preserving_merges "$@" && return
 	output git cherry-pick $empty_args $ff "$@"
-}
-
-pick_one_preserving_merges () {
-	fast_forward=t
-	case "$1" in
-	-n)
-		fast_forward=f
-		sha1=$2
-		;;
-	*)
-		sha1=$1
-		;;
-	esac
-	sha1=$(git rev-parse $sha1)
-
-	if test -f "$state_dir"/current-commit
-	then
-		if test "$fast_forward" = t
-		then
-			while read current_commit
-			do
-				git rev-parse HEAD > "$rewritten"/$current_commit
-			done <"$state_dir"/current-commit
-			rm "$state_dir"/current-commit ||
-			die "Cannot write current commit's replacement sha1"
-		fi
-	fi
-
-	echo $sha1 >> "$state_dir"/current-commit
-
-	# rewrite parents; if none were rewritten, we can fast-forward.
-	new_parents=
-	pend=" $(git rev-list --parents -1 $sha1 | cut -d' ' -s -f2-)"
-	if test "$pend" = " "
-	then
-		pend=" root"
-	fi
-	while [ "$pend" != "" ]
-	do
-		p=$(expr "$pend" : ' \([^ ]*\)')
-		pend="${pend# $p}"
-
-		if test -f "$rewritten"/$p
-		then
-			new_p=$(cat "$rewritten"/$p)
-
-			# If the todo reordered commits, and our parent is marked for
-			# rewriting, but hasn't been gotten to yet, assume the user meant to
-			# drop it on top of the current HEAD
-			if test -z "$new_p"
-			then
-				new_p=$(git rev-parse HEAD)
-			fi
-
-			test $p != $new_p && fast_forward=f
-			case "$new_parents" in
-			*$new_p*)
-				;; # do nothing; that parent is already there
-			*)
-				new_parents="$new_parents $new_p"
-				;;
-			esac
-		else
-			if test -f "$dropped"/$p
-			then
-				fast_forward=f
-				replacement="$(cat "$dropped"/$p)"
-				test -z "$replacement" && replacement=root
-				pend=" $replacement$pend"
-			else
-				new_parents="$new_parents $p"
-			fi
-		fi
-	done
-	case $fast_forward in
-	t)
-		output warn "Fast-forward to $sha1"
-		output git reset --hard $sha1 ||
-			die "Cannot fast-forward to $sha1"
-		;;
-	f)
-		first_parent=$(expr "$new_parents" : ' \([^ ]*\)')
-
-		if [ "$1" != "-n" ]
-		then
-			# detach HEAD to current parent
-			output git checkout $first_parent 2> /dev/null ||
-				die "Cannot move HEAD to $first_parent"
-		fi
-
-		case "$new_parents" in
-		' '*' '*)
-			test "a$1" = a-n && die "Refusing to squash a merge: $sha1"
-
-			# redo merge
-			author_script_content=$(get_author_ident_from_commit $sha1)
-			eval "$author_script_content"
-			msg_content="$(commit_message $sha1)"
-			# No point in merging the first parent, that's HEAD
-			new_parents=${new_parents# $first_parent}
-			if ! do_with_author output \
-				git merge --no-ff ${strategy:+-s $strategy} -m \
-					"$msg_content" $new_parents
-			then
-				printf "%s\n" "$msg_content" > "$GIT_DIR"/MERGE_MSG
-				die_with_patch $sha1 "Error redoing merge $sha1"
-			fi
-			echo "$sha1 $(git rev-parse HEAD^0)" >> "$rewritten_list"
-			;;
-		*)
-			output git cherry-pick "$@" ||
-				die_with_patch $sha1 "Could not pick $sha1"
-			;;
-		esac
-		;;
-	esac
 }
 
 nth_string () {
@@ -576,6 +453,52 @@ do_next () {
 			warn
 			exit 1
 		fi
+		;;
+	label|l)
+		mkdir -p "$state_dir"/labels
+		test -f "$state_dir"/labels/"$sha1" &&
+		die "Mark $sha1 already exists"
+		git rev-parse HEAD > "$state_dir"/labels/"$sha1"
+		mark_action_done
+		;;
+	goto|g)
+		commit="$(cat "$state_dir"/labels/"$sha1")" ||
+		die "No such mark: $sha1"
+		git checkout $commit^0 ||
+		die "Invalid mark: $sha1 ($commit)"
+		mark_action_done
+		;;
+	merge|m)
+		# TODO: skip if we can fast-forward
+		mark_action_done
+		case "$sha1" in
+		-c)
+			sha1=${rest%% *}
+			message="$(git cat-file commit $sha1 |
+				sed '1,/^$/d')" ||
+			die "Invalid merge commit: $sha1"
+			parents=${rest#* }
+			;;
+		*)
+			parents="$sha1 $rest"
+			message="Merge $parents"
+			;;
+		esac
+		parents=$(for parent in $parents
+			do
+				case "$parent" in
+				rewritten-*|onto)
+					cat "$state_dir"/labels/"$parent" ||
+					die "Invalid parent: $parent"
+					;;
+				*)
+					echo "$parent"
+					;;
+				esac
+			done) ||
+		die "Could not parse parents: $parents"
+		git merge --no-ff -m "$message" $parents ||
+		die "Could not merge "
 		;;
 	*)
 		warn "Unknown command: $command $sha1 $rest"
@@ -832,28 +755,6 @@ mkdir "$state_dir" || die "Could not create temporary $state_dir"
 
 : > "$state_dir"/interactive || die "Could not mark as interactive"
 write_basic_state
-if test t = "$preserve_merges"
-then
-	if test -z "$rebase_root"
-	then
-		mkdir "$rewritten" &&
-		for c in $(git merge-base --all $orig_head $upstream)
-		do
-			echo $onto > "$rewritten"/$c ||
-				die "Could not init rewritten commits"
-		done
-	else
-		mkdir "$rewritten" &&
-		echo $onto > "$rewritten"/root ||
-			die "Could not init rewritten commits"
-	fi
-	# No cherry-pick because our first pass is to determine
-	# parents to rewrite and skipping dropped commits would
-	# prematurely end our probe
-	merges_option=
-else
-	merges_option="--no-merges --cherry-pick"
-fi
 
 shorthead=$(git rev-parse --short $orig_head)
 shortonto=$(git rev-parse --short $onto)
@@ -863,11 +764,13 @@ then
 	shortupstream=$(git rev-parse --short $upstream)
 	revisions=$upstream...$orig_head
 	shortrevisions=$shortupstream..$shorthead
+	upstreamdotdot=$shortupstream..
 else
 	revisions=$onto...$orig_head
 	shortrevisions=$shorthead
+	upstreamdotdot=
 fi
-git rev-list $merges_option --pretty=oneline --abbrev-commit \
+git rev-list --no-merges --cherry-pick --pretty=oneline --abbrev-commit \
 	--abbrev=7 --reverse --left-right --topo-order \
 	$revisions | \
 	sed -n "s/^>//p" |
@@ -881,57 +784,104 @@ do
 		comment_out=
 	fi
 
-	if test t != "$preserve_merges"
-	then
-		printf '%s\n' "${comment_out}pick $shortsha1 $rest" >>"$todo"
-	else
-		sha1=$(git rev-parse $shortsha1)
-		if test -z "$rebase_root"
-		then
-			preserve=t
-			for p in $(git rev-list --parents -1 $sha1 | cut -d' ' -s -f2-)
-			do
-				if test -f "$rewritten"/$p
-				then
-					preserve=f
-				fi
-			done
-		else
-			preserve=f
-		fi
-		if test f = "$preserve"
-		then
-			touch "$rewritten"/$sha1
-			printf '%s\n' "${comment_out}pick $shortsha1 $rest" >>"$todo"
-		fi
-	fi
+	printf '%s\n' "${comment_out}pick $shortsha1 $rest" >>"$todo"
 done
 
-# Watch for commits that been dropped by --cherry-pick
-if test t = "$preserve_merges"
-then
-	mkdir "$dropped"
-	# Save all non-cherry-picked changes
-	git rev-list $revisions --left-right --cherry-pick | \
-		sed -n "s/^>//p" > "$state_dir"/not-cherry-picks
-	# Now all commits and note which ones are missing in
-	# not-cherry-picks and hence being dropped
-	git rev-list $revisions |
-	while read rev
+test t = "$preserve_merges" && {
+	# --topo-order has the bad habit of breaking first-parent chains
+	# over merges, so we do it ourselves here
+
+	oldtodo="$(cat "$todo")"
+	list="$(git log --format='%h %p' --reverse $upstreamdotdot$orig_head)"
+	newtodo='label onto'
+
+	toberebased=" $(echo "$list" | cut -f 1 -d ' ' | tr '\n' ' ')"
+	handled=
+	needslabel=
+
+	# each tip is an end point of a commit->first parent chain
+	branch_tips="$(printf '%s\n. . %s' "$list" "$shorthead" |
+		cut -f 3- -d ' ' |
+		tr ' ' '\n' |
+		grep -v '^$')"
+	for tip in $branch_tips
 	do
-		if test -f "$rewritten"/$rev -a "$(sane_grep "$rev" "$state_dir"/not-cherry-picks)" = ""
-		then
-			# Use -f2 because if rev-list is telling us this commit is
-			# not worthwhile, we don't want to track its multiple heads,
-			# just the history of its first-parent for others that will
-			# be rebasing on top of it
-			git rev-list --parents -1 $rev | cut -d' ' -s -f2 > "$dropped"/$rev
-			short=$(git rev-list -1 --abbrev-commit --abbrev=7 $rev)
-			sane_grep -v "^[a-z][a-z]* $short" <"$todo" > "${todo}2" ; mv "${todo}2" "$todo"
-			rm "$rewritten"/$rev
-		fi
+		# if this is not a commit to be rebased, skip
+		case "$toberebased" in *" $tip "*) ;; *) continue;; esac
+
+		# if it is handled already, skip
+		case "$handled " in *" $tip "*) continue;; esac
+
+		# start sub-todo for this tip
+		part=
+		commit=$tip
+		while true
+		do
+			# if already handled, this is our branch point
+			case "$handled " in
+			*" $commit "*)
+				needslabel="$needslabel $commit"
+				part="$(printf '%s # %s\n%s' \
+					"goto rewritten-$commit" \
+					"$(git show -s --format=%s $commit)" \
+					"$part")"
+				break
+				;;
+			esac
+
+			line="$(echo "$list" | grep "^$commit ")"
+			# if there is no line, branch from the 'onto' commit
+			if test -z "$line"
+			then
+				part="$(printf '%s\n%s' \
+					"goto onto" "$part")"
+				break
+			fi
+			parents=${line#* }
+			case "$parents" in
+			*' '*)
+				# merge
+				merge_parents="$(for parent in ${parents#* }
+					do
+						case "$toberebased" in
+						*" $parent "*)
+							printf rewritten-
+							;;
+						esac
+						echo "$parent "
+					done)"
+				needslabel="$needslabel $(echo "$merge_parents" |
+					tr ' ' '\n' |
+					sed -n 's/^rewritten-//p')"
+				part="$(printf '%s\n%s\n%s' \
+					"# $(git show -s --format=%s $commit)" \
+					"merge -c $commit ${merge_parents% }" \
+					"$part")"
+				;;
+			*)
+				# non-merge commit
+				line="$(echo "$oldtodo" | grep "^pick $commit")"
+				if test -z "$line"
+				then
+					line="# skip $commit"
+				fi
+				part="$(printf '%s\n%s' "$line" "$part")"
+				;;
+			esac
+			handled="$handled $commit"
+			commit=${parents%% *}
+		done
+		newtodo="$(printf '%s\n\n%s' "$newtodo" "$part")"
 	done
-fi
+
+	for commit in $needslabel
+	do
+		newtodo="$(echo "$newtodo" |
+			sed "s/^\(pick\|# skip\|merge -c\) $commit.*/&\\nlabel rewritten-$commit/")"
+	done
+	newtodo="$(echo "$newtodo" | uniq)"
+	echo "$newtodo" > "$todo"
+}
 
 test -s "$todo" || echo noop >> "$todo"
 test -n "$autosquash" && rearrange_squash "$todo"
@@ -964,7 +914,7 @@ git_sequence_editor "$todo" ||
 has_action "$todo" ||
 	die_abort "Nothing to do"
 
-test -d "$rewritten" || test -n "$force_rebase" || skip_unnecessary_picks
+test -n "$force_rebase" || skip_unnecessary_picks
 
 output git checkout $onto || die_abort "could not detach HEAD"
 git update-ref ORIG_HEAD $orig_head
