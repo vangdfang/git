@@ -1992,31 +1992,6 @@ const char *get_windows_home_directory(void)
 
 	return home_directory;
 }
-
-int mingw_offset_1st_component(const char *path)
-{
-	int offset = 0;
-	if (has_dos_drive_prefix(path))
-		offset = 2;
-
-	/* unc paths */
-	else if (is_dir_sep(path[0]) && is_dir_sep(path[1])) {
-
-		/* skip server name */
-		char *pos = strpbrk(path + 2, "\\/");
-		if (!pos)
-			return 0; /* Error: malformed unc path */
-
-		do {
-			pos++;
-		} while (*pos && !is_dir_sep(*pos));
-
-		offset = pos - path;
-	}
-
-	return offset + is_dir_sep(path[offset]);
-}
-
 int xutftowcsn(wchar_t *wcs, const char *utfs, size_t wcslen, int utflen)
 {
 	int upos = 0, wpos = 0;
@@ -2270,4 +2245,28 @@ void mingw_startup()
 
 	/* init length of current directory for handle_long_path */
 	current_directory_len = GetCurrentDirectoryW(0, NULL);
+}
+
+int mingw_offset_1st_component(const char *path)
+{
+	int offset = 0;
+	if (has_dos_drive_prefix(path))
+		offset = 2;
+
+	/* unc paths */
+	else if (is_dir_sep(path[0]) && is_dir_sep(path[1])) {
+
+		/* skip server name */
+		char *pos = strpbrk(path + 2, "\\/");
+		if (!pos)
+			return 0; /* Error: malformed unc path */
+
+		do {
+			pos++;
+		} while (*pos && !is_dir_sep(*pos));
+
+		offset = pos - path;
+	}
+
+	return offset + is_dir_sep(path[offset]);
 }

@@ -262,7 +262,6 @@ save_stash () {
 		clear_stash || die "$(gettext "Cannot initialize stash")"
 
 	create_stash "$stash_msg" $untracked
-	mkdir -p "$GIT_DIR/logs/${ref_stash%/*}"
 	store_stash -m "$stash_msg" -q $w_commit ||
 	die "$(gettext "Cannot save the current status")"
 	say Saved working directory and index state "$stash_msg"
@@ -513,8 +512,14 @@ apply_stash () {
 pop_stash() {
 	assert_stash_ref "$@"
 
-	apply_stash "$@" &&
-	drop_stash "$@"
+	if apply_stash "$@"
+	then
+		drop_stash "$@"
+	else
+		status=$?
+		say "The stash is kept in case you need it again."
+		exit $status
+	fi
 }
 
 drop_stash () {

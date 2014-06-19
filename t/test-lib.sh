@@ -281,7 +281,7 @@ error "Test script did not set test_description."
 
 if test "$help" = "t"
 then
-	echo "$test_description"
+	printf '%s\n' "$test_description"
 	exit 0
 fi
 
@@ -332,7 +332,7 @@ test_failure_ () {
 	test_failure=$(($test_failure + 1))
 	say_color error "not ok $test_count - $1"
 	shift
-	echo "$@" | sed -e 's/^/#	/'
+	printf '%s\n' "$*" | sed -e 's/^/#	/'
 	test "$immediate" = "" || { GIT_EXIT_OK=t; exit 1; }
 }
 
@@ -792,24 +792,12 @@ else
 	test_set_prereq C_LOCALE_OUTPUT
 fi
 
-# Use this instead of test_cmp to compare files that are expected to contain
-# text (and therefore it should not matter whether the line ends in an LF or
-# a CR/LF).
-test_cmp_text () {
-	if test_have_prereq MINGW
-	then
-		dos2unix "$1" &&
-		dos2unix "$2"
-	fi &&
-	test_cmp "$@"
-}
-
 # Use this instead of test_cmp to compare files that contain expected and
 # actual output from git commands that can be translated.  When running
 # under GETTEXT_POISON this pretends that the command produced expected
 # results.
 test_i18ncmp () {
-	test -n "$GETTEXT_POISON" || test_cmp_text "$@"
+	test -n "$GETTEXT_POISON" || test_cmp "$@"
 }
 
 # Use this instead of "grep expected-string actual" to see if the

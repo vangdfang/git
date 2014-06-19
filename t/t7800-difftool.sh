@@ -253,7 +253,7 @@ test_expect_success PERL 'difftool --extcmd echo arg1' '
 	echo file >expect &&
 	git difftool --no-prompt \
 		--extcmd sh\ -c\ \"echo\ \$1\" branch >actual &&
-	test_cmp_text expect actual
+	test_cmp expect actual
 '
 
 test_expect_success PERL 'difftool --extcmd cat arg1' '
@@ -394,14 +394,14 @@ run_dir_diff_test 'difftool --dir-diff syncs worktree with unstaged change' '
 	echo "orig content" >file &&
 	git difftool -d $symlinks --extcmd "$(pwd)/modify-right-file" branch &&
 	echo "new content" >expect &&
-	test_cmp_text expect file
+	test_cmp expect file
 '
 
 run_dir_diff_test 'difftool --dir-diff syncs worktree without unstaged change' '
 	test_when_finished git reset --hard &&
 	git difftool -d $symlinks --extcmd "$(pwd)/modify-right-file" branch &&
 	echo "new content" >expect &&
-	test_cmp_text expect file
+	test_cmp expect file
 '
 
 write_script modify-file <<\EOF
@@ -412,7 +412,7 @@ test_expect_success PERL 'difftool --no-symlinks does not overwrite working tree
 	echo "orig content" >file &&
 	git difftool --dir-diff --no-symlinks --extcmd "$(pwd)/modify-file" branch &&
 	echo "new content" >expect &&
-	test_cmp_text expect file
+	test_cmp expect file
 '
 
 write_script modify-both-files <<\EOF
@@ -428,9 +428,23 @@ test_expect_success PERL 'difftool --no-symlinks detects conflict ' '
 		echo "orig content" >file &&
 		test_must_fail git difftool --dir-diff --no-symlinks --extcmd "$(pwd)/modify-both-files" branch &&
 		echo "wt content" >expect &&
-		test_cmp_text expect file &&
+		test_cmp expect file &&
 		echo "tmp content" >expect &&
-		test_cmp_text expect "$(cat tmpdir)/file"
+		test_cmp expect "$(cat tmpdir)/file"
+	)
+'
+
+test_expect_success PERL 'difftool properly honors gitlink and core.worktree' '
+	git submodule add ./. submod/ule &&
+	(
+		cd submod/ule &&
+		test_config diff.tool checktrees &&
+		test_config difftool.checktrees.cmd '\''
+			test -d "$LOCAL" && test -d "$REMOTE" && echo good
+		'\'' &&
+		echo good >expect &&
+		git difftool --tool=checktrees --dir-diff HEAD~ >actual &&
+		test_cmp expect actual
 	)
 '
 

@@ -159,7 +159,7 @@ all::
 #
 # Define NEEDS_LIBINTL_BEFORE_LIBICONV if you need libintl before libiconv.
 #
-# Define NO_INTPTR_T if you don't have intptr_t nor uintptr_t.
+# Define NO_INTPTR_T if you don't have intptr_t or uintptr_t.
 #
 # Define NO_UINTMAX_T if you don't have uintmax_t.
 #
@@ -342,6 +342,9 @@ all::
 # Define DEFAULT_HELP_FORMAT to "man", "info" or "html"
 # (defaults to "man") if you want to have a different default when
 # "git help" is called without a parameter specifying the format.
+#
+# Define GMTIME_UNRELIABLE_ERRORS if your gmtime() function does not
+# return NULL when it receives a bogus time_t.
 
 GIT-VERSION-FILE: FORCE
 	@$(SHELL_PATH) ./GIT-VERSION-GEN
@@ -1130,13 +1133,11 @@ else
 	REMOTE_CURL_NAMES = $(REMOTE_CURL_PRIMARY) $(REMOTE_CURL_ALIASES)
 	PROGRAM_OBJS += http-fetch.o
 	PROGRAMS += $(REMOTE_CURL_NAMES)
-	curl_check := $(shell (echo 070908; curl-config --vernum) 2>/dev/null | sort -r | sed -ne 2p)
-	ifeq "$(curl_check)" "070908"
-		ifndef NO_EXPAT
+	ifndef NO_EXPAT
+		ifndef NO_CURL_MULTI
 			PROGRAM_OBJS += http-push.o
 		endif
-	endif
-	ifndef NO_EXPAT
+
 		ifdef EXPATDIR
 			BASIC_CFLAGS += -I$(EXPATDIR)/include
 			EXPAT_LIBEXPAT = -L$(EXPATDIR)/$(lib) $(CC_LD_DYNPATH)$(EXPATDIR)/$(lib) -lexpat
@@ -1498,6 +1499,11 @@ endif
 
 ifneq (,$(XDL_FAST_HASH))
 	BASIC_CFLAGS += -DXDL_FAST_HASH
+endif
+
+ifdef GMTIME_UNRELIABLE_ERRORS
+	COMPAT_OBJS += compat/gmtime.o
+	BASIC_CFLAGS += -DGMTIME_UNRELIABLE_ERRORS
 endif
 
 ifeq ($(TCLTK_PATH),)
